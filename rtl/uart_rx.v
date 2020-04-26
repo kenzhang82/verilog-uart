@@ -98,17 +98,21 @@ always @(posedge clk) begin
         overrun_error_reg <= 0;
         frame_error_reg <= 0;
 
+        // valid pulse generation
         if (m_axis_tvalid && m_axis_tready) begin
             m_axis_tvalid_reg <= 0;
         end
 
         if (prescale_reg > 0) begin
             prescale_reg <= prescale_reg - 1;
+        // Data bits / stop bit
         end else if (bit_cnt > 0) begin
             if (bit_cnt > DATA_WIDTH+1) begin
+                // See if it is legit start bit (LOW)
                 if (!rxd_reg) begin
                     bit_cnt <= bit_cnt - 1;
                     prescale_reg <= (prescale << 3)-1;
+                // Go back to look for start bit again
                 end else begin
                     bit_cnt <= 0;
                     prescale_reg <= 0;
@@ -116,21 +120,27 @@ always @(posedge clk) begin
             end else if (bit_cnt > 1) begin
                 bit_cnt <= bit_cnt - 1;
                 prescale_reg <= (prescale << 3)-1;
+                // Right shift rxd (from MSB -> LSB) into data_reg
                 data_reg <= {rxd_reg, data_reg[DATA_WIDTH-1:1]};
             end else if (bit_cnt == 1) begin
                 bit_cnt <= bit_cnt - 1;
+                // Look for stop bit (HIGH)
                 if (rxd_reg) begin
                     m_axis_tdata_reg <= data_reg;
                     m_axis_tvalid_reg <= 1;
+                    // One cycle later
                     overrun_error_reg <= m_axis_tvalid_reg;
                 end else begin
                     frame_error_reg <= 1;
                 end
             end
+        // Start bit seeking
         end else begin
             busy_reg <= 0;
+            // Look for start bit (LOW)
             if (!rxd_reg) begin
-                prescale_reg <= (prescale << 2)-2;
+                // Wait for some time (8 * prescale - 1 / 2) ~= 4 * prescale
+                prescale_reg <= (prescale << 2) - 1;
                 bit_cnt <= DATA_WIDTH+2;
                 data_reg <= 0;
                 busy_reg <= 1;
