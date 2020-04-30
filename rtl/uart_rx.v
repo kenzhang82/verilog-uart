@@ -63,90 +63,84 @@ module uart_rx #
 
 );
 
-reg [DATA_WIDTH-1:0] m_axis_tdata_reg = 0;
-reg m_axis_tvalid_reg = 0;
+    reg [DATA_WIDTH-1:0] m_axis_tdata_reg = 0;
+    reg m_axis_tvalid_reg = 0;
+    reg rxd_reg = 1;
+    reg busy_reg = 0;
+    reg overrun_error_reg = 0;
+    reg frame_error_reg = 0;
+    reg [15:0] prescale_reg = 0;
+    reg [3:0] bit_cnt = 0;
 
-reg rxd_reg = 1;
+    assign m_axis_tdata = m_axis_tdata_reg;
+    assign m_axis_tvalid = m_axis_tvalid_reg;
+    assign busy = busy_reg;
+    assign overrun_error = overrun_error_reg;
+    assign frame_error = frame_error_reg;
 
-reg busy_reg = 0;
-reg overrun_error_reg = 0;
-reg frame_error_reg = 0;
-
-reg [DATA_WIDTH-1:0] data_reg = 0;
-reg [18:0] prescale_reg = 0;
-reg [3:0] bit_cnt = 0;
-
-assign m_axis_tdata = m_axis_tdata_reg;
-assign m_axis_tvalid = m_axis_tvalid_reg;
-
-assign busy = busy_reg;
-assign overrun_error = overrun_error_reg;
-assign frame_error = frame_error_reg;
-
-always @(posedge clk) begin
-    if (rst) begin
-        m_axis_tdata_reg <= 0;
-        m_axis_tvalid_reg <= 0;
-        rxd_reg <= 1;
-        prescale_reg <= 0;
-        bit_cnt <= 0;
-        busy_reg <= 0;
-        overrun_error_reg <= 0;
-        frame_error_reg <= 0;
-    end else begin
-        rxd_reg <= rxd;
-        overrun_error_reg <= 0;
-        frame_error_reg <= 0;
-
-        // valid pulse generation
-        if (m_axis_tvalid && m_axis_tready) begin
-            m_axis_tvalid_reg <= 0;
+    always @(posedge clk) begin
+        if (rst) begin
+            m_axis_tdata_reg = 0;
+            m_axis_tvalid_reg = 0;
+            rxd_reg = 1;
+            busy_reg = 0;
+            overrun_error_reg = 0;
+            frame_error_reg = 0;
+            prescale_reg = 0;
+            bit_cnt <= 0;
         end
-
-        if (prescale_reg > 0) begin
-            prescale_reg <= prescale_reg - 1;
-        // Data bits / stop bit
-        end else if (bit_cnt > 0) begin
-            if (bit_cnt > DATA_WIDTH+1) begin
-                // See if it is legit start bit (LOW)
-                if (!rxd_reg) begin
-                    bit_cnt <= bit_cnt - 1;
-                    prescale_reg <= (prescale << 3)-1;
-                // Go back to look for start bit again
-                end else begin
-                    bit_cnt <= 0;
-                    prescale_reg <= 0;
+        else begin
+            // Sample rx data in every cycle
+            rxd_reg <= rxd;
+            if (prescale_reg > 0) begin
+                prescale_reg <= prescale_reg - 1;
+            end
+            // Generate a single-cycle valid
+            else if (m_axis_tvalid && m_axis_tready) begin
+                m_axis_tvalid_reg <= 0;
+            end
+            else if (bit_cnt > 0) begin
+                if (bit_cnt > DATA_WIDTH + 1) begin
+                    // Confirm if this is a good start bit
+                    if (!rxd_reg) begin
+                        // good start bit
+                        prescale_reg <= (prescale << 3) - 1;
+                        bit_cnt <= bit_cnt - 1;
+                    end
+                    else begin
+                        // bad start bit, go back to detection
+                        prescale_reg <= 0;
+                        bit_cnt <= 0;
+                    end
                 end
-            end else if (bit_cnt > 1) begin
-                bit_cnt <= bit_cnt - 1;
-                prescale_reg <= (prescale << 3)-1;
-                // Right shift rxd (from MSB -> LSB) into data_reg
-                data_reg <= {rxd_reg, data_reg[DATA_WIDTH-1:1]};
-            end else if (bit_cnt == 1) begin
-                bit_cnt <= bit_cnt - 1;
-                // Look for stop bit (HIGH)
-                if (rxd_reg) begin
-                    m_axis_tdata_reg <= data_reg;
-                    m_axis_tvalid_reg <= 1;
-                    // One cycle later
-                    overrun_error_reg <= m_axis_tvalid_reg;
-                end else begin
-                    frame_error_reg <= 1;
+                else if (bit_cnt > 1) begin
+                    // Shift rxd right into m_axis_tdata_reg one bit at a time
+                    m_axis_tdata_reg <= {rxd_reg, m_axis_tdata[DATA_WIDTH-1:1]};
+                    prescale_reg <= (prescale << 3) - 1;
+                    bit_cnt <= bit_cnt - 1;
+                end
+                else begin
+                    bit_cnt <= bit_cnt - 1;
+                    if (rxd_reg) begin
+                        // good stop bit
+                        m_axis_tdata_reg <= m_axis_tdata;
+                        m_axis_tvalid_reg <= 1;
+                        overrun_error_reg <= m_axis_tvalid_reg;
+                    end
+                    else begin
+                        // bad stop bit, report frame error
+                        frame_error_reg <= 1;
+                    end
                 end
             end
-        // Start bit seeking
-        end else begin
-            busy_reg <= 0;
-            // Look for start bit (LOW)
-            if (!rxd_reg) begin
-                // Wait for some time (8 * prescale - 1 / 2) ~= 4 * prescale
-                prescale_reg <= (prescale << 2) - 1;
-                bit_cnt <= DATA_WIDTH+2;
-                data_reg <= 0;
-                busy_reg <= 1;
+            // Start bit detection
+            else begin
+                if (!rxd_reg) begin
+                    prescale_reg <= (prescale << 2) - 1;
+                    bit_cnt <= DATA_WIDTH + 2; // Start and stop bit
+                end
             end
         end
     end
-end
 
 endmodule
